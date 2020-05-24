@@ -1510,7 +1510,7 @@ class BootstrapTable {
 
   initBodyEvent () {
     // click to select by column
-    this.$body.find('> tr[data-index] > td').off('click dblclick').on('click dblclick', e => {
+    this.$body.find('> tr[data-index] > td').off('click dblclick contextmenu').on('click dblclick contextmenu', e => {
       const $td = $(e.currentTarget)
       const $tr = $td.parent()
       const $cardViewArr = $(e.target).parents('.card-views').children()
@@ -1529,6 +1529,7 @@ class BootstrapTable {
 
       this.trigger(e.type === 'click' ? 'click-cell' : 'dbl-click-cell', field, value, item, $td)
       this.trigger(e.type === 'click' ? 'click-row' : 'dbl-click-row', item, $tr, field)
+      e.type === 'contextmenu' && this.trigger('right-click', item, $tr, field, e)
 
       // if click to select - then trigger the checkbox/radio click
       if (
