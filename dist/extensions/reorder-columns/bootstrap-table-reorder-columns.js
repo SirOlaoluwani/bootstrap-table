@@ -4,7 +4,7 @@
 	(global = global || self, factory(global.jQuery));
 }(this, (function ($) { 'use strict';
 
-	$ = $ && Object.prototype.hasOwnProperty.call($, 'default') ? $['default'] : $;
+	$ = $ && $.hasOwnProperty('default') ? $['default'] : $;
 
 	var commonjsGlobal = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
 
@@ -36,7 +36,7 @@
 
 	// Thank's IE8 for his funny defineProperty
 	var descriptors = !fails(function () {
-	  return Object.defineProperty({}, 1, { get: function () { return 7; } })[1] != 7;
+	  return Object.defineProperty({}, 'a', { get: function () { return 7; } }).a != 7;
 	});
 
 	var nativePropertyIsEnumerable = {}.propertyIsEnumerable;
@@ -217,9 +217,9 @@
 	(module.exports = function (key, value) {
 	  return sharedStore[key] || (sharedStore[key] = value !== undefined ? value : {});
 	})('versions', []).push({
-	  version: '3.6.5',
+	  version: '3.6.0',
 	  mode:  'global',
-	  copyright: '© 2020 Denis Pushkarev (zloirock.ru)'
+	  copyright: '© 2019 Denis Pushkarev (zloirock.ru)'
 	});
 	});
 
@@ -554,11 +554,11 @@
 	  // eslint-disable-next-line no-undef
 	  && !Symbol.sham
 	  // eslint-disable-next-line no-undef
-	  && typeof Symbol.iterator == 'symbol';
+	  && typeof Symbol() == 'symbol';
 
 	var WellKnownSymbolsStore = shared('wks');
 	var Symbol$1 = global_1.Symbol;
-	var createWellKnownSymbol = useSymbolAsUid ? Symbol$1 : Symbol$1 && Symbol$1.withoutSetter || uid;
+	var createWellKnownSymbol = useSymbolAsUid ? Symbol$1 : uid;
 
 	var wellKnownSymbol = function (name) {
 	  if (!has(WellKnownSymbolsStore, name)) {
@@ -584,7 +584,7 @@
 	  } return new (C === undefined ? Array : C)(length === 0 ? 0 : length);
 	};
 
-	var engineUserAgent = getBuiltIn('navigator', 'userAgent') || '';
+	var userAgent = getBuiltIn('navigator', 'userAgent') || '';
 
 	var process = global_1.process;
 	var versions = process && process.versions;
@@ -594,15 +594,15 @@
 	if (v8) {
 	  match = v8.split('.');
 	  version = match[0] + match[1];
-	} else if (engineUserAgent) {
-	  match = engineUserAgent.match(/Edge\/(\d+)/);
+	} else if (userAgent) {
+	  match = userAgent.match(/Edge\/(\d+)/);
 	  if (!match || match[1] >= 74) {
-	    match = engineUserAgent.match(/Chrome\/(\d+)/);
+	    match = userAgent.match(/Chrome\/(\d+)/);
 	    if (match) version = match[1];
 	  }
 	}
 
-	var engineV8Version = version && +version;
+	var v8Version = version && +version;
 
 	var SPECIES$1 = wellKnownSymbol('species');
 
@@ -610,7 +610,7 @@
 	  // We can't use this feature detection in V8 since it causes
 	  // deoptimization and serious performance degradation
 	  // https://github.com/zloirock/core-js/issues/677
-	  return engineV8Version >= 51 || !fails(function () {
+	  return v8Version >= 51 || !fails(function () {
 	    var array = [];
 	    var constructor = array.constructor = {};
 	    constructor[SPECIES$1] = function () {
@@ -627,7 +627,7 @@
 	// We can't use this feature detection in V8 since it causes
 	// deoptimization and serious performance degradation
 	// https://github.com/zloirock/core-js/issues/679
-	var IS_CONCAT_SPREADABLE_SUPPORT = engineV8Version >= 51 || !fails(function () {
+	var IS_CONCAT_SPREADABLE_SUPPORT = v8Version >= 51 || !fails(function () {
 	  var array = [];
 	  array[IS_CONCAT_SPREADABLE] = false;
 	  return array.concat()[0] !== array;
@@ -675,7 +675,7 @@
 	};
 
 	// optional / simple context binding
-	var functionBindContext = function (fn, that, length) {
+	var bindContext = function (fn, that, length) {
 	  aFunction$1(fn);
 	  if (that === undefined) return fn;
 	  switch (length) {
@@ -710,7 +710,7 @@
 	  return function ($this, callbackfn, that, specificCreate) {
 	    var O = toObject($this);
 	    var self = indexedObject(O);
-	    var boundFunction = functionBindContext(callbackfn, that, 3);
+	    var boundFunction = bindContext(callbackfn, that, 3);
 	    var length = toLength(self.length);
 	    var index = 0;
 	    var create = specificCreate || arraySpeciesCreate;
@@ -757,37 +757,15 @@
 	  findIndex: createMethod$1(6)
 	};
 
-	var defineProperty = Object.defineProperty;
-	var cache = {};
-
-	var thrower = function (it) { throw it; };
-
-	var arrayMethodUsesToLength = function (METHOD_NAME, options) {
-	  if (has(cache, METHOD_NAME)) return cache[METHOD_NAME];
-	  if (!options) options = {};
-	  var method = [][METHOD_NAME];
-	  var ACCESSORS = has(options, 'ACCESSORS') ? options.ACCESSORS : false;
-	  var argument0 = has(options, 0) ? options[0] : thrower;
-	  var argument1 = has(options, 1) ? options[1] : undefined;
-
-	  return cache[METHOD_NAME] = !!method && !fails(function () {
-	    if (ACCESSORS && !descriptors) return true;
-	    var O = { length: -1 };
-
-	    if (ACCESSORS) defineProperty(O, 1, { enumerable: true, get: thrower });
-	    else O[1] = 1;
-
-	    method.call(O, argument0, argument1);
-	  });
-	};
-
 	var $filter = arrayIteration.filter;
 
 
 
 	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('filter');
 	// Edge 14- issue
-	var USES_TO_LENGTH = arrayMethodUsesToLength('filter');
+	var USES_TO_LENGTH = HAS_SPECIES_SUPPORT && !fails(function () {
+	  [].filter.call({ length: -1, 0: 1 }, function (it) { throw it; });
+	});
 
 	// `Array.prototype.filter` method
 	// https://tc39.github.io/ecma262/#sec-array.prototype.filter
@@ -909,18 +887,15 @@
 	var $find = arrayIteration.find;
 
 
-
 	var FIND = 'find';
 	var SKIPS_HOLES = true;
-
-	var USES_TO_LENGTH$1 = arrayMethodUsesToLength(FIND);
 
 	// Shouldn't skip holes
 	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
 
 	// `Array.prototype.find` method
 	// https://tc39.github.io/ecma262/#sec-array.prototype.find
-	_export({ target: 'Array', proto: true, forced: SKIPS_HOLES || !USES_TO_LENGTH$1 }, {
+	_export({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
 	  find: function find(callbackfn /* , that = undefined */) {
 	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
 	  }
@@ -1002,21 +977,21 @@
 	var trim = stringTrim.trim;
 
 
-	var $parseInt = global_1.parseInt;
+	var nativeParseInt = global_1.parseInt;
 	var hex = /^[+-]?0[Xx]/;
-	var FORCED$1 = $parseInt(whitespaces + '08') !== 8 || $parseInt(whitespaces + '0x16') !== 22;
+	var FORCED$1 = nativeParseInt(whitespaces + '08') !== 8 || nativeParseInt(whitespaces + '0x16') !== 22;
 
 	// `parseInt` method
 	// https://tc39.github.io/ecma262/#sec-parseint-string-radix
-	var numberParseInt = FORCED$1 ? function parseInt(string, radix) {
+	var _parseInt = FORCED$1 ? function parseInt(string, radix) {
 	  var S = trim(String(string));
-	  return $parseInt(S, (radix >>> 0) || (hex.test(S) ? 16 : 10));
-	} : $parseInt;
+	  return nativeParseInt(S, (radix >>> 0) || (hex.test(S) ? 16 : 10));
+	} : nativeParseInt;
 
 	// `parseInt` method
 	// https://tc39.github.io/ecma262/#sec-parseint-string-radix
-	_export({ global: true, forced: parseInt != numberParseInt }, {
-	  parseInt: numberParseInt
+	_export({ global: true, forced: parseInt != _parseInt }, {
+	  parseInt: _parseInt
 	});
 
 	function _classCallCheck(instance, Constructor) {
@@ -1072,19 +1047,6 @@
 	  return _setPrototypeOf(o, p);
 	}
 
-	function _isNativeReflectConstruct() {
-	  if (typeof Reflect === "undefined" || !Reflect.construct) return false;
-	  if (Reflect.construct.sham) return false;
-	  if (typeof Proxy === "function") return true;
-
-	  try {
-	    Date.prototype.toString.call(Reflect.construct(Date, [], function () {}));
-	    return true;
-	  } catch (e) {
-	    return false;
-	  }
-	}
-
 	function _assertThisInitialized(self) {
 	  if (self === void 0) {
 	    throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
@@ -1099,25 +1061,6 @@
 	  }
 
 	  return _assertThisInitialized(self);
-	}
-
-	function _createSuper(Derived) {
-	  var hasNativeReflectConstruct = _isNativeReflectConstruct();
-
-	  return function () {
-	    var Super = _getPrototypeOf(Derived),
-	        result;
-
-	    if (hasNativeReflectConstruct) {
-	      var NewTarget = _getPrototypeOf(this).constructor;
-
-	      result = Reflect.construct(Super, arguments, NewTarget);
-	    } else {
-	      result = Super.apply(this, arguments);
-	    }
-
-	    return _possibleConstructorReturn(this, result);
-	  };
 	}
 
 	function _superPropBase(object, property) {
@@ -1151,7 +1094,7 @@
 	}
 
 	function _slicedToArray(arr, i) {
-	  return _arrayWithHoles(arr) || _iterableToArrayLimit(arr, i) || _unsupportedIterableToArray(arr, i) || _nonIterableRest();
+	  return _arrayWithHoles(arr) || _iterableToArrayLimit(arr, i) || _nonIterableRest();
 	}
 
 	function _arrayWithHoles(arr) {
@@ -1159,7 +1102,10 @@
 	}
 
 	function _iterableToArrayLimit(arr, i) {
-	  if (typeof Symbol === "undefined" || !(Symbol.iterator in Object(arr))) return;
+	  if (!(Symbol.iterator in Object(arr) || Object.prototype.toString.call(arr) === "[object Arguments]")) {
+	    return;
+	  }
+
 	  var _arr = [];
 	  var _n = true;
 	  var _d = false;
@@ -1185,25 +1131,8 @@
 	  return _arr;
 	}
 
-	function _unsupportedIterableToArray(o, minLen) {
-	  if (!o) return;
-	  if (typeof o === "string") return _arrayLikeToArray(o, minLen);
-	  var n = Object.prototype.toString.call(o).slice(8, -1);
-	  if (n === "Object" && o.constructor) n = o.constructor.name;
-	  if (n === "Map" || n === "Set") return Array.from(o);
-	  if (n === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)) return _arrayLikeToArray(o, minLen);
-	}
-
-	function _arrayLikeToArray(arr, len) {
-	  if (len == null || len > arr.length) len = arr.length;
-
-	  for (var i = 0, arr2 = new Array(len); i < len; i++) arr2[i] = arr[i];
-
-	  return arr2;
-	}
-
 	function _nonIterableRest() {
-	  throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+	  throw new TypeError("Invalid attempt to destructure non-iterable instance");
 	}
 
 	/**
@@ -1279,15 +1208,15 @@
 	});
 	$.fn.bootstrapTable.methods.push('orderColumns');
 
-	$.BootstrapTable = /*#__PURE__*/function (_$$BootstrapTable) {
+	$.BootstrapTable =
+	/*#__PURE__*/
+	function (_$$BootstrapTable) {
 	  _inherits(_class, _$$BootstrapTable);
-
-	  var _super = _createSuper(_class);
 
 	  function _class() {
 	    _classCallCheck(this, _class);
 
-	    return _super.apply(this, arguments);
+	    return _possibleConstructorReturn(this, _getPrototypeOf(_class).apply(this, arguments));
 	  }
 
 	  _createClass(_class, [{
@@ -1387,9 +1316,7 @@
 	          });
 	          _this.columnsSortOrder = sortOrder;
 
-	          if (_this.options.cookie) {
-	            _this.persistReorderColumnsState(_this);
-	          }
+	          _this.persistReorderColumnsState(_this);
 
 	          var ths = [];
 	          var formatters = [];

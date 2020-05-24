@@ -1222,25 +1222,6 @@
 	  }
 	});
 
-	var $filter = arrayIteration.filter;
-
-
-
-	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('filter');
-	// Edge 14- issue
-	var USES_TO_LENGTH = HAS_SPECIES_SUPPORT && !fails(function () {
-	  [].filter.call({ length: -1, 0: 1 }, function (it) { throw it; });
-	});
-
-	// `Array.prototype.filter` method
-	// https://tc39.github.io/ecma262/#sec-array.prototype.filter
-	// with adding support of @@species
-	_export({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT || !USES_TO_LENGTH }, {
-	  filter: function filter(callbackfn /* , thisArg */) {
-	    return $filter(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-	  }
-	});
-
 	var UNSCOPABLES = wellKnownSymbol('unscopables');
 	var ArrayPrototype = Array.prototype;
 
@@ -1257,6 +1238,26 @@
 	var addToUnscopables = function (key) {
 	  ArrayPrototype[UNSCOPABLES][key] = true;
 	};
+
+	var $find = arrayIteration.find;
+
+
+	var FIND = 'find';
+	var SKIPS_HOLES = true;
+
+	// Shouldn't skip holes
+	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+	// `Array.prototype.find` method
+	// https://tc39.github.io/ecma262/#sec-array.prototype.find
+	_export({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+	  find: function find(callbackfn /* , that = undefined */) {
+	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+	  }
+	});
+
+	// https://tc39.github.io/ecma262/#sec-array.prototype-@@unscopables
+	addToUnscopables(FIND);
 
 	var correctPrototypeGetter = !fails(function () {
 	  function F() { /* empty */ }
@@ -1484,6 +1485,41 @@
 	  }
 	});
 
+	var SPECIES$2 = wellKnownSymbol('species');
+	var nativeSlice = [].slice;
+	var max$1 = Math.max;
+
+	// `Array.prototype.slice` method
+	// https://tc39.github.io/ecma262/#sec-array.prototype.slice
+	// fallback for not array-like ES3 strings and DOM objects
+	_export({ target: 'Array', proto: true, forced: !arrayMethodHasSpeciesSupport('slice') }, {
+	  slice: function slice(start, end) {
+	    var O = toIndexedObject(this);
+	    var length = toLength(O.length);
+	    var k = toAbsoluteIndex(start, length);
+	    var fin = toAbsoluteIndex(end === undefined ? length : end, length);
+	    // inline `ArraySpeciesCreate` for usage native `Array#slice` where it's possible
+	    var Constructor, result, n;
+	    if (isArray(O)) {
+	      Constructor = O.constructor;
+	      // cross-realm fallback
+	      if (typeof Constructor == 'function' && (Constructor === Array || isArray(Constructor.prototype))) {
+	        Constructor = undefined;
+	      } else if (isObject(Constructor)) {
+	        Constructor = Constructor[SPECIES$2];
+	        if (Constructor === null) Constructor = undefined;
+	      }
+	      if (Constructor === Array || Constructor === undefined) {
+	        return nativeSlice.call(O, k, fin);
+	      }
+	    }
+	    result = new (Constructor === undefined ? Array : Constructor)(max$1(fin - k, 0));
+	    for (n = 0; k < fin; k++, n++) if (k in O) createProperty(result, n, O[k]);
+	    result.length = n;
+	    return result;
+	  }
+	});
+
 	var TO_STRING_TAG$1 = wellKnownSymbol('toStringTag');
 	var test = {};
 
@@ -1525,6 +1561,133 @@
 	if (!toStringTagSupport) {
 	  redefine(Object.prototype, 'toString', objectToString, { unsafe: true });
 	}
+
+	// `RegExp.prototype.flags` getter implementation
+	// https://tc39.github.io/ecma262/#sec-get-regexp.prototype.flags
+	var regexpFlags = function () {
+	  var that = anObject(this);
+	  var result = '';
+	  if (that.global) result += 'g';
+	  if (that.ignoreCase) result += 'i';
+	  if (that.multiline) result += 'm';
+	  if (that.dotAll) result += 's';
+	  if (that.unicode) result += 'u';
+	  if (that.sticky) result += 'y';
+	  return result;
+	};
+
+	// babel-minify transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError,
+	// so we use an intermediate function.
+	function RE(s, f) {
+	  return RegExp(s, f);
+	}
+
+	var UNSUPPORTED_Y = fails(function () {
+	  // babel-minify transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
+	  var re = RE('a', 'y');
+	  re.lastIndex = 2;
+	  return re.exec('abcd') != null;
+	});
+
+	var BROKEN_CARET = fails(function () {
+	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
+	  var re = RE('^r', 'gy');
+	  re.lastIndex = 2;
+	  return re.exec('str') != null;
+	});
+
+	var regexpStickyHelpers = {
+		UNSUPPORTED_Y: UNSUPPORTED_Y,
+		BROKEN_CARET: BROKEN_CARET
+	};
+
+	var nativeExec = RegExp.prototype.exec;
+	// This always refers to the native implementation, because the
+	// String#replace polyfill uses ./fix-regexp-well-known-symbol-logic.js,
+	// which loads this file before patching the method.
+	var nativeReplace = String.prototype.replace;
+
+	var patchedExec = nativeExec;
+
+	var UPDATES_LAST_INDEX_WRONG = (function () {
+	  var re1 = /a/;
+	  var re2 = /b*/g;
+	  nativeExec.call(re1, 'a');
+	  nativeExec.call(re2, 'a');
+	  return re1.lastIndex !== 0 || re2.lastIndex !== 0;
+	})();
+
+	var UNSUPPORTED_Y$1 = regexpStickyHelpers.UNSUPPORTED_Y || regexpStickyHelpers.BROKEN_CARET;
+
+	// nonparticipating capturing group, copied from es5-shim's String#split patch.
+	var NPCG_INCLUDED = /()??/.exec('')[1] !== undefined;
+
+	var PATCH = UPDATES_LAST_INDEX_WRONG || NPCG_INCLUDED || UNSUPPORTED_Y$1;
+
+	if (PATCH) {
+	  patchedExec = function exec(str) {
+	    var re = this;
+	    var lastIndex, reCopy, match, i;
+	    var sticky = UNSUPPORTED_Y$1 && re.sticky;
+	    var flags = regexpFlags.call(re);
+	    var source = re.source;
+	    var charsAdded = 0;
+	    var strCopy = str;
+
+	    if (sticky) {
+	      flags = flags.replace('y', '');
+	      if (flags.indexOf('g') === -1) {
+	        flags += 'g';
+	      }
+
+	      strCopy = String(str).slice(re.lastIndex);
+	      // Support anchored sticky behavior.
+	      if (re.lastIndex > 0 && (!re.multiline || re.multiline && str[re.lastIndex - 1] !== '\n')) {
+	        source = '(?: ' + source + ')';
+	        strCopy = ' ' + strCopy;
+	        charsAdded++;
+	      }
+	      // ^(? + rx + ) is needed, in combination with some str slicing, to
+	      // simulate the 'y' flag.
+	      reCopy = new RegExp('^(?:' + source + ')', flags);
+	    }
+
+	    if (NPCG_INCLUDED) {
+	      reCopy = new RegExp('^' + source + '$(?!\\s)', flags);
+	    }
+	    if (UPDATES_LAST_INDEX_WRONG) lastIndex = re.lastIndex;
+
+	    match = nativeExec.call(sticky ? reCopy : re, strCopy);
+
+	    if (sticky) {
+	      if (match) {
+	        match.input = match.input.slice(charsAdded);
+	        match[0] = match[0].slice(charsAdded);
+	        match.index = re.lastIndex;
+	        re.lastIndex += match[0].length;
+	      } else re.lastIndex = 0;
+	    } else if (UPDATES_LAST_INDEX_WRONG && match) {
+	      re.lastIndex = re.global ? match.index + match[0].length : lastIndex;
+	    }
+	    if (NPCG_INCLUDED && match && match.length > 1) {
+	      // Fix browsers whose `exec` methods don't consistently return `undefined`
+	      // for NPCG, like IE8. NOTE: This doesn' work for /(.?)?/
+	      nativeReplace.call(match[0], reCopy, function () {
+	        for (i = 1; i < arguments.length - 2; i++) {
+	          if (arguments[i] === undefined) match[i] = undefined;
+	        }
+	      });
+	    }
+
+	    return match;
+	  };
+	}
+
+	var regexpExec = patchedExec;
+
+	_export({ target: 'RegExp', proto: true, forced: /./.exec !== regexpExec }, {
+	  exec: regexpExec
+	});
 
 	// `String.prototype.{ codePointAt, at }` methods implementation
 	var createMethod$2 = function (CONVERT_TO_STRING) {
@@ -1578,6 +1741,253 @@
 	  point = charAt(string, index);
 	  state.index += point.length;
 	  return { value: point, done: false };
+	});
+
+	var SPECIES$3 = wellKnownSymbol('species');
+
+	var REPLACE_SUPPORTS_NAMED_GROUPS = !fails(function () {
+	  // #replace needs built-in support for named groups.
+	  // #match works fine because it just return the exec results, even if it has
+	  // a "grops" property.
+	  var re = /./;
+	  re.exec = function () {
+	    var result = [];
+	    result.groups = { a: '7' };
+	    return result;
+	  };
+	  return ''.replace(re, '$<a>') !== '7';
+	});
+
+	// IE <= 11 replaces $0 with the whole match, as if it was $&
+	// https://stackoverflow.com/questions/6024666/getting-ie-to-replace-a-regex-with-the-literal-string-0
+	var REPLACE_KEEPS_$0 = (function () {
+	  return 'a'.replace(/./, '$0') === '$0';
+	})();
+
+	// Chrome 51 has a buggy "split" implementation when RegExp#exec !== nativeExec
+	// Weex JS has frozen built-in prototypes, so use try / catch wrapper
+	var SPLIT_WORKS_WITH_OVERWRITTEN_EXEC = !fails(function () {
+	  var re = /(?:)/;
+	  var originalExec = re.exec;
+	  re.exec = function () { return originalExec.apply(this, arguments); };
+	  var result = 'ab'.split(re);
+	  return result.length !== 2 || result[0] !== 'a' || result[1] !== 'b';
+	});
+
+	var fixRegexpWellKnownSymbolLogic = function (KEY, length, exec, sham) {
+	  var SYMBOL = wellKnownSymbol(KEY);
+
+	  var DELEGATES_TO_SYMBOL = !fails(function () {
+	    // String methods call symbol-named RegEp methods
+	    var O = {};
+	    O[SYMBOL] = function () { return 7; };
+	    return ''[KEY](O) != 7;
+	  });
+
+	  var DELEGATES_TO_EXEC = DELEGATES_TO_SYMBOL && !fails(function () {
+	    // Symbol-named RegExp methods call .exec
+	    var execCalled = false;
+	    var re = /a/;
+
+	    if (KEY === 'split') {
+	      // We can't use real regex here since it causes deoptimization
+	      // and serious performance degradation in V8
+	      // https://github.com/zloirock/core-js/issues/306
+	      re = {};
+	      // RegExp[@@split] doesn't call the regex's exec method, but first creates
+	      // a new one. We need to return the patched regex when creating the new one.
+	      re.constructor = {};
+	      re.constructor[SPECIES$3] = function () { return re; };
+	      re.flags = '';
+	      re[SYMBOL] = /./[SYMBOL];
+	    }
+
+	    re.exec = function () { execCalled = true; return null; };
+
+	    re[SYMBOL]('');
+	    return !execCalled;
+	  });
+
+	  if (
+	    !DELEGATES_TO_SYMBOL ||
+	    !DELEGATES_TO_EXEC ||
+	    (KEY === 'replace' && !(REPLACE_SUPPORTS_NAMED_GROUPS && REPLACE_KEEPS_$0)) ||
+	    (KEY === 'split' && !SPLIT_WORKS_WITH_OVERWRITTEN_EXEC)
+	  ) {
+	    var nativeRegExpMethod = /./[SYMBOL];
+	    var methods = exec(SYMBOL, ''[KEY], function (nativeMethod, regexp, str, arg2, forceStringMethod) {
+	      if (regexp.exec === regexpExec) {
+	        if (DELEGATES_TO_SYMBOL && !forceStringMethod) {
+	          // The native String method already delegates to @@method (this
+	          // polyfilled function), leasing to infinite recursion.
+	          // We avoid it by directly calling the native @@method method.
+	          return { done: true, value: nativeRegExpMethod.call(regexp, str, arg2) };
+	        }
+	        return { done: true, value: nativeMethod.call(str, regexp, arg2) };
+	      }
+	      return { done: false };
+	    }, { REPLACE_KEEPS_$0: REPLACE_KEEPS_$0 });
+	    var stringMethod = methods[0];
+	    var regexMethod = methods[1];
+
+	    redefine(String.prototype, KEY, stringMethod);
+	    redefine(RegExp.prototype, SYMBOL, length == 2
+	      // 21.2.5.8 RegExp.prototype[@@replace](string, replaceValue)
+	      // 21.2.5.11 RegExp.prototype[@@split](string, limit)
+	      ? function (string, arg) { return regexMethod.call(string, this, arg); }
+	      // 21.2.5.6 RegExp.prototype[@@match](string)
+	      // 21.2.5.9 RegExp.prototype[@@search](string)
+	      : function (string) { return regexMethod.call(string, this); }
+	    );
+	  }
+
+	  if (sham) createNonEnumerableProperty(RegExp.prototype[SYMBOL], 'sham', true);
+	};
+
+	var charAt$1 = stringMultibyte.charAt;
+
+	// `AdvanceStringIndex` abstract operation
+	// https://tc39.github.io/ecma262/#sec-advancestringindex
+	var advanceStringIndex = function (S, index, unicode) {
+	  return index + (unicode ? charAt$1(S, index).length : 1);
+	};
+
+	// `RegExpExec` abstract operation
+	// https://tc39.github.io/ecma262/#sec-regexpexec
+	var regexpExecAbstract = function (R, S) {
+	  var exec = R.exec;
+	  if (typeof exec === 'function') {
+	    var result = exec.call(R, S);
+	    if (typeof result !== 'object') {
+	      throw TypeError('RegExp exec method returned something other than an Object or null');
+	    }
+	    return result;
+	  }
+
+	  if (classofRaw(R) !== 'RegExp') {
+	    throw TypeError('RegExp#exec called on incompatible receiver');
+	  }
+
+	  return regexpExec.call(R, S);
+	};
+
+	var max$2 = Math.max;
+	var min$2 = Math.min;
+	var floor$1 = Math.floor;
+	var SUBSTITUTION_SYMBOLS = /\$([$&'`]|\d\d?|<[^>]*>)/g;
+	var SUBSTITUTION_SYMBOLS_NO_NAMED = /\$([$&'`]|\d\d?)/g;
+
+	var maybeToString = function (it) {
+	  return it === undefined ? it : String(it);
+	};
+
+	// @@replace logic
+	fixRegexpWellKnownSymbolLogic('replace', 2, function (REPLACE, nativeReplace, maybeCallNative, reason) {
+	  return [
+	    // `String.prototype.replace` method
+	    // https://tc39.github.io/ecma262/#sec-string.prototype.replace
+	    function replace(searchValue, replaceValue) {
+	      var O = requireObjectCoercible(this);
+	      var replacer = searchValue == undefined ? undefined : searchValue[REPLACE];
+	      return replacer !== undefined
+	        ? replacer.call(searchValue, O, replaceValue)
+	        : nativeReplace.call(String(O), searchValue, replaceValue);
+	    },
+	    // `RegExp.prototype[@@replace]` method
+	    // https://tc39.github.io/ecma262/#sec-regexp.prototype-@@replace
+	    function (regexp, replaceValue) {
+	      if (reason.REPLACE_KEEPS_$0 || (typeof replaceValue === 'string' && replaceValue.indexOf('$0') === -1)) {
+	        var res = maybeCallNative(nativeReplace, regexp, this, replaceValue);
+	        if (res.done) return res.value;
+	      }
+
+	      var rx = anObject(regexp);
+	      var S = String(this);
+
+	      var functionalReplace = typeof replaceValue === 'function';
+	      if (!functionalReplace) replaceValue = String(replaceValue);
+
+	      var global = rx.global;
+	      if (global) {
+	        var fullUnicode = rx.unicode;
+	        rx.lastIndex = 0;
+	      }
+	      var results = [];
+	      while (true) {
+	        var result = regexpExecAbstract(rx, S);
+	        if (result === null) break;
+
+	        results.push(result);
+	        if (!global) break;
+
+	        var matchStr = String(result[0]);
+	        if (matchStr === '') rx.lastIndex = advanceStringIndex(S, toLength(rx.lastIndex), fullUnicode);
+	      }
+
+	      var accumulatedResult = '';
+	      var nextSourcePosition = 0;
+	      for (var i = 0; i < results.length; i++) {
+	        result = results[i];
+
+	        var matched = String(result[0]);
+	        var position = max$2(min$2(toInteger(result.index), S.length), 0);
+	        var captures = [];
+	        // NOTE: This is equivalent to
+	        //   captures = result.slice(1).map(maybeToString)
+	        // but for some reason `nativeSlice.call(result, 1, result.length)` (called in
+	        // the slice polyfill when slicing native arrays) "doesn't work" in safari 9 and
+	        // causes a crash (https://pastebin.com/N21QzeQA) when trying to debug it.
+	        for (var j = 1; j < result.length; j++) captures.push(maybeToString(result[j]));
+	        var namedCaptures = result.groups;
+	        if (functionalReplace) {
+	          var replacerArgs = [matched].concat(captures, position, S);
+	          if (namedCaptures !== undefined) replacerArgs.push(namedCaptures);
+	          var replacement = String(replaceValue.apply(undefined, replacerArgs));
+	        } else {
+	          replacement = getSubstitution(matched, S, position, captures, namedCaptures, replaceValue);
+	        }
+	        if (position >= nextSourcePosition) {
+	          accumulatedResult += S.slice(nextSourcePosition, position) + replacement;
+	          nextSourcePosition = position + matched.length;
+	        }
+	      }
+	      return accumulatedResult + S.slice(nextSourcePosition);
+	    }
+	  ];
+
+	  // https://tc39.github.io/ecma262/#sec-getsubstitution
+	  function getSubstitution(matched, str, position, captures, namedCaptures, replacement) {
+	    var tailPos = position + matched.length;
+	    var m = captures.length;
+	    var symbols = SUBSTITUTION_SYMBOLS_NO_NAMED;
+	    if (namedCaptures !== undefined) {
+	      namedCaptures = toObject(namedCaptures);
+	      symbols = SUBSTITUTION_SYMBOLS;
+	    }
+	    return nativeReplace.call(replacement, symbols, function (match, ch) {
+	      var capture;
+	      switch (ch.charAt(0)) {
+	        case '$': return '$';
+	        case '&': return matched;
+	        case '`': return str.slice(0, position);
+	        case "'": return str.slice(tailPos);
+	        case '<':
+	          capture = namedCaptures[ch.slice(1, -1)];
+	          break;
+	        default: // \d\d?
+	          var n = +ch;
+	          if (n === 0) return match;
+	          if (n > m) {
+	            var f = floor$1(n / 10);
+	            if (f === 0) return match;
+	            if (f <= m) return captures[f - 1] === undefined ? ch.charAt(1) : captures[f - 1] + ch.charAt(1);
+	            return match;
+	          }
+	          capture = captures[n - 1];
+	      }
+	      return capture === undefined ? '' : capture;
+	    });
+	  }
 	});
 
 	// iterable DOM collections
@@ -1644,168 +2054,109 @@
 	  }
 	}
 
-	function _classCallCheck(instance, Constructor) {
-	  if (!(instance instanceof Constructor)) {
-	    throw new TypeError("Cannot call a class as a function");
-	  }
-	}
-
-	function _defineProperties(target, props) {
-	  for (var i = 0; i < props.length; i++) {
-	    var descriptor = props[i];
-	    descriptor.enumerable = descriptor.enumerable || false;
-	    descriptor.configurable = true;
-	    if ("value" in descriptor) descriptor.writable = true;
-	    Object.defineProperty(target, descriptor.key, descriptor);
-	  }
-	}
-
-	function _createClass(Constructor, protoProps, staticProps) {
-	  if (protoProps) _defineProperties(Constructor.prototype, protoProps);
-	  if (staticProps) _defineProperties(Constructor, staticProps);
-	  return Constructor;
-	}
-
-	function _inherits(subClass, superClass) {
-	  if (typeof superClass !== "function" && superClass !== null) {
-	    throw new TypeError("Super expression must either be null or a function");
-	  }
-
-	  subClass.prototype = Object.create(superClass && superClass.prototype, {
-	    constructor: {
-	      value: subClass,
-	      writable: true,
-	      configurable: true
-	    }
-	  });
-	  if (superClass) _setPrototypeOf(subClass, superClass);
-	}
-
-	function _getPrototypeOf(o) {
-	  _getPrototypeOf = Object.setPrototypeOf ? Object.getPrototypeOf : function _getPrototypeOf(o) {
-	    return o.__proto__ || Object.getPrototypeOf(o);
-	  };
-	  return _getPrototypeOf(o);
-	}
-
-	function _setPrototypeOf(o, p) {
-	  _setPrototypeOf = Object.setPrototypeOf || function _setPrototypeOf(o, p) {
-	    o.__proto__ = p;
-	    return o;
-	  };
-
-	  return _setPrototypeOf(o, p);
-	}
-
-	function _assertThisInitialized(self) {
-	  if (self === void 0) {
-	    throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
-	  }
-
-	  return self;
-	}
-
-	function _possibleConstructorReturn(self, call) {
-	  if (call && (typeof call === "object" || typeof call === "function")) {
-	    return call;
-	  }
-
-	  return _assertThisInitialized(self);
-	}
-
-	function _superPropBase(object, property) {
-	  while (!Object.prototype.hasOwnProperty.call(object, property)) {
-	    object = _getPrototypeOf(object);
-	    if (object === null) break;
-	  }
-
-	  return object;
-	}
-
-	function _get(target, property, receiver) {
-	  if (typeof Reflect !== "undefined" && Reflect.get) {
-	    _get = Reflect.get;
-	  } else {
-	    _get = function _get(target, property, receiver) {
-	      var base = _superPropBase(target, property);
-
-	      if (!base) return;
-	      var desc = Object.getOwnPropertyDescriptor(base, property);
-
-	      if (desc.get) {
-	        return desc.get.call(receiver);
-	      }
-
-	      return desc.value;
-	    };
-	  }
-
-	  return _get(target, property, receiver || target);
-	}
-
 	/**
-	 * @author: YL
-	 * @update: zhixin wen <wenzhixin2010@gmail.com>
-	 */
+	* @author andrey matveev <aamatveef@gmail.com>
+	* @version: v1.1.0
+	* https://github.com/aamatveev/bootstrap-table
+	* extensions:
+	*/
 
 	$.extend($.fn.bootstrapTable.defaults, {
-	  treeEnable: false,
-	  treeShowField: null,
-	  idField: 'id',
-	  parentIdField: 'pid',
-	  rootParentId: null
+	  cellInputEnabled: false,
+	  cellInputType: 'text',
+	  // text or select or textarea
+	  cellInputUniqueId: '',
+	  cellInputSelectOptinons: [],
+	  // [{ text: '', value: '', disabled: false, default: true },{}]
+	  cellInputIsDeciaml: false,
+	  onCellInputInit: function onCellInputInit() {
+	    return false;
+	  },
+	  onCellInputBlur: function onCellInputBlur(field, row, oldValue, $el) {
+	    return false;
+	  },
+	  onCellInputFocus: function onCellInputFocus(field, row, oldValue, $el) {
+	    return false;
+	  },
+	  onCellInputKeyup: function onCellInputKeyup(field, row, oldValue, $el) {
+	    return false;
+	  },
+	  onCellInputKeydown: function onCellInputKeydown(field, row, oldValue, $el) {
+	    return false;
+	  },
+	  onCellInputSelectChange: function onCellInputSelectChange(field, row, oldValue, $el) {
+	    return false;
+	  }
 	});
+	$.extend($.fn.bootstrapTable.Constructor.EVENTS, {
+	  'cellinput-init.bs.table': 'onCellInputInit',
+	  'cellinput-blur.bs.table': 'onCellInputBlur',
+	  'cellinput-focus.bs.table': 'onCellInputFocus',
+	  'cellinput-keyup.bs.table': 'onCellInputKeyup',
+	  'cellinput-keydown.bs.table': 'onCellInputKeydown',
+	  'cellinput-selectchange.bs.table': 'onCellInputSelectChange'
+	});
+	var BootstrapTable = $.fn.bootstrapTable.Constructor;
+	var _initTable = BootstrapTable.prototype.initTable;
+	var _initBody = BootstrapTable.prototype.initBody;
 
-	$.BootstrapTable =
-	/*#__PURE__*/
-	function (_$$BootstrapTable) {
-	  _inherits(_class, _$$BootstrapTable);
-
-	  function _class() {
-	    _classCallCheck(this, _class);
-
-	    return _possibleConstructorReturn(this, _getPrototypeOf(_class).apply(this, arguments));
+	BootstrapTable.prototype.initTable = function () {
+	  for (var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++) {
+	    args[_key] = arguments[_key];
 	  }
 
-	  _createClass(_class, [{
-	    key: "init",
-	    value: function init() {
-	      var _get2;
+	  _initTable.apply(this, Array.prototype.slice.apply(args)); // exit if table.options.cellInputEnabled = false
 
-	      this._rowStyle = this.options.rowStyle;
 
-	      for (var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++) {
-	        args[_key] = arguments[_key];
-	      }
+	  if (!this.options.cellInputEnabled) {
+	    return;
+	  }
 
-	      (_get2 = _get(_getPrototypeOf(_class.prototype), "init", this)).call.apply(_get2, [this].concat(args));
+	  $.each(this.columns, function (i, column) {
+	    // exit if column.cellInputEnabled = false
+	    if (!column.cellInputEnabled) {
+	      return;
 	    }
-	  }, {
-	    key: "initHeader",
-	    value: function initHeader() {
-	      var _get3;
 
-	      for (var _len2 = arguments.length, args = new Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
-	        args[_key2] = arguments[_key2];
-	      }
+	    var _formatter = column.formatter;
 
-	      (_get3 = _get(_getPrototypeOf(_class.prototype), "initHeader", this)).call.apply(_get3, [this].concat(args));
+	    if (column.cellInputType === 'text') {
+	      column.formatter = function (value, row, index) {
+	        var result = _formatter ? _formatter(value, row, index) : value; // Решает проблему невозможности ввода кавычек &quot;
 
-	      var treeShowField = this.options.treeShowField;
+	        result = typeof result === 'string' ? result.replace(/"/g, '&quot;') : result;
+	        var isSetDataUniqueIdAttr = column.cellInputUniqueId && column.cellInputUniqueId.length > 0;
+	        var disableCallbackFunc = column.cellInputDisableCallbackFunc;
+	        return ['<input type="text" class="table-td-textbox form-control"', // ' id="' + column.field + '"',
+	        isSetDataUniqueIdAttr ? " data-uniqueid=\"".concat(row[column.cellInputUniqueId], "\"") : '', " data-name=\"".concat(column.field, "\""), " data-value=\"".concat(result, "\""), " value=\"".concat(result, "\""), ' autofocus="autofocus"', typeof disableCallbackFunc !== 'undefined' && disableCallbackFunc(row) ? ' disabled="disabled"' : '', '>'].join('');
+	      };
+	    } else if (column.cellInputType === 'select') {
+	      column.formatter = function (value, row, index) {
+	        var result = _formatter ? _formatter(value, row, index) : value;
+	        var optionDatas = column.cellInputSelectOptinons !== null ? column.cellInputSelectOptinons : [];
+	        var selectoptions = [];
+	        var arrAllowedValues = [];
 
-	      if (treeShowField) {
+	        for (var k = 0; k < optionDatas.length; k++) {
+	          arrAllowedValues.push(optionDatas[k].value);
+	        }
+
+	        var allowedVal = $.inArray(value, arrAllowedValues) >= 0;
 	        var _iteratorNormalCompletion = true;
 	        var _didIteratorError = false;
 	        var _iteratorError = undefined;
 
 	        try {
-	          for (var _iterator = this.header.fields[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-	            var field = _step.value;
+	          for (var _iterator = optionDatas[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
+	            var optionData = _step.value;
+	            var isSelected = optionData.value === value;
 
-	            if (treeShowField === field) {
-	              this.treeEnable = true;
-	              break;
+	            if (!allowedVal && optionData.disabled) {
+	              isSelected = true;
+	              result = optionData.value;
 	            }
+
+	            selectoptions.push("<option value=\"".concat(optionData.value, "\" ").concat(isSelected ? ' selected="selected" ' : '').concat(optionData.disabled ? ' disabled' : '', ">").concat(optionData.text, "</option>"));
 	          }
 	        } catch (err) {
 	          _didIteratorError = true;
@@ -1821,90 +2172,77 @@
 	            }
 	          }
 	        }
-	      }
+
+	        var isSetDataUniqueIdAttr = column.cellInputUniqueId && column.cellInputUniqueId.length > 0;
+	        var disableCallbackFunc = column.disableCallbackFunc;
+	        return ['<select class="form-control" style="padding: 4px;"', isSetDataUniqueIdAttr ? " data-uniqueid=\"".concat(row[column.cellInputUniqueId], "\"") : '', " data-name=\"".concat(column.field, "\""), " data-value=\"".concat(result, "\""), typeof disableCallbackFunc !== 'undefined' && disableCallbackFunc(row) ? ' disabled="disabled"' : '', '>', selectoptions.join(''), '</select>'].join('');
+	      };
 	    }
-	  }, {
-	    key: "initBody",
-	    value: function initBody() {
-	      var _get4;
+	  });
+	};
 
-	      if (this.treeEnable) {
-	        this.options.virtualScroll = false;
-	      }
+	BootstrapTable.prototype.initBody = function (fixedScroll) {
+	  var that = this;
 
-	      for (var _len3 = arguments.length, args = new Array(_len3), _key3 = 0; _key3 < _len3; _key3++) {
-	        args[_key3] = arguments[_key3];
-	      }
+	  _initBody.apply(this, Array.prototype.slice.apply(arguments));
 
-	      (_get4 = _get(_getPrototypeOf(_class.prototype), "initBody", this)).call.apply(_get4, [this].concat(args));
-	    }
-	  }, {
-	    key: "initTr",
-	    value: function initTr(item, idx, data, parentDom) {
-	      var _this = this;
+	  if (!this.options.cellInputEnabled) {
+	    return;
+	  }
 
-	      var nodes = data.filter(function (it) {
-	        return item[_this.options.idField] === it[_this.options.parentIdField];
+	  $.each(this.columns, function (i, column) {
+	    if (column.cellInputType === 'text') {
+	      that.$body.find("input[data-name=\"".concat(column.field, "\"]")).off('blur').on('blur', function (e) {
+	        var data = that.getData();
+	        var index = $(this).parents('tr[data-index]').data('index');
+	        var row = data[index];
+	        var newValue = $(this).val();
+	        row[column.field] = newValue;
+	        that.trigger('cellinput-blur', column.field, row, $(this));
 	      });
-	      parentDom.append(_get(_getPrototypeOf(_class.prototype), "initRow", this).call(this, item, idx, data, parentDom)); // init sub node
+	      that.$body.find("input[data-name=\"".concat(column.field, "\"]")).off('keyup').on('keyup', function (e) {
+	        var data = that.getData();
+	        var index = $(this).parents('tr[data-index]').data('index');
+	        var row = data[index];
+	        var oldValue = row[column.field];
+	        var newValue = $(this).val();
+	        row[column.field] = newValue;
+	        that.trigger('cellinput-keyup', column.field, row, oldValue, index, $(this));
+	      });
+	      that.$body.find("input[data-name=\"".concat(column.field, "\"]")).off('keydown').on('keydown', function (e) {
+	        var data = that.getData();
+	        var index = $(this).parents('tr[data-index]').data('index');
+	        var row = data[index];
+	        var oldValue = row[column.field];
+	        var newValue = $(this).val();
 
-	      var len = nodes.length - 1;
-
-	      for (var i = 0; i <= len; i++) {
-	        var node = nodes[i];
-	        var defaultItem = $.extend(true, {}, item);
-	        node._level = defaultItem._level + 1;
-	        node._parent = defaultItem;
-
-	        if (i === len) {
-	          node._last = 1;
-	        } // jquery.treegrid.js
-
-
-	        this.options.rowStyle = function (item, idx) {
-	          var res = _this._rowStyle(item, idx);
-
-	          var id = item[_this.options.idField] ? item[_this.options.idField] : 0;
-	          var pid = item[_this.options.parentIdField] ? item[_this.options.parentIdField] : 0;
-	          res.classes = [res.classes || '', "treegrid-".concat(id), "treegrid-parent-".concat(pid)].join(' ');
-	          return res;
-	        };
-
-	        this.initTr(node, $.inArray(node, data), data, parentDom);
-	      }
-	    }
-	  }, {
-	    key: "initRow",
-	    value: function initRow(item, idx, data, parentDom) {
-	      var _this2 = this;
-
-	      if (this.treeEnable) {
-	        if (this.options.rootParentId === item[this.options.parentIdField] || !item[this.options.parentIdField]) {
-	          if (item._level === undefined) {
-	            item._level = 0;
-	          } // jquery.treegrid.js
-
-
-	          this.options.rowStyle = function (item, idx) {
-	            var res = _this2._rowStyle(item, idx);
-
-	            var x = item[_this2.options.idField] ? item[_this2.options.idField] : 0;
-	            res.classes = [res.classes || '', "treegrid-".concat(x)].join(' ');
-	            return res;
-	          };
-
-	          this.initTr(item, idx, data, parentDom);
-	          return true;
+	        if (!column.tdtexboxIsDeciaml) {
+	          row[column.field] = newValue;
 	        }
 
-	        return false;
-	      }
-
-	      return _get(_getPrototypeOf(_class.prototype), "initRow", this).call(this, item, idx, data, parentDom);
+	        that.trigger('cellinput-keydown', column.field, row, oldValue, index, $(this));
+	      });
+	      that.$body.find("input[data-name=\"".concat(column.field, "\"]")).off('focus').on('focus', function (e) {
+	        var data = that.getData();
+	        var index = $(this).parents('tr[data-index]').data('index');
+	        var row = data[index];
+	        that.trigger('cellinput-focus', column.field, row, $(this));
+	      });
+	    } else if (column.cellInputType === 'select') {
+	      that.$body.find("select[data-name=\"".concat(column.field, "\"]")).off('change').on('change', function (e) {
+	        var data = that.getData();
+	        var index = $(this).parents('tr[data-index]').data('index');
+	        var row = data[index];
+	        var oldValue = row[column.field];
+	        var newValue = $(this).val();
+	        var isBoolTrue = newValue.toLowerCase() === 'true';
+	        var isBoolFalse = newValue.toLowerCase() === 'false';
+	        row[column.field] = isBoolTrue ? true : isBoolFalse ? false : newValue;
+	        that.trigger('cellinput-selectchange', column.field, row, oldValue, index, $(this));
+	      });
 	    }
-	  }]);
-
-	  return _class;
-	}($.BootstrapTable);
+	  });
+	  this.trigger('cellinput-init');
+	};
 
 })));

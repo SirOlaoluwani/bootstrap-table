@@ -327,9 +327,6 @@ const DEFAULTS = {
   },
   onScrollBody () {
     return false
-  },
-  onRightClickRow (field, value, row, $element, event) {
-    return false
   }
 }
 
@@ -499,8 +496,7 @@ const EVENTS = {
   'refresh-options.bs.table': 'onRefreshOptions',
   'reset-view.bs.table': 'onResetView',
   'refresh.bs.table': 'onRefresh',
-  'scroll-body.bs.table': 'onScrollBody',
-  'right-click.bs.table': 'onRightClickRow'
+  'scroll-body.bs.table': 'onScrollBody'
 }
 
 Object.assign(DEFAULTS, EN)
